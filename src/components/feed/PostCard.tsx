@@ -10,7 +10,9 @@ import {
   getInitials, 
   getAvatarUrl,
   formatLikeCount,
-  formatCommentCount 
+  formatCommentCount,
+  isImageUrl,
+  isVideoUrl 
 } from '@/services/utils';
 import { LikeButton } from './LikeButton';
 import { CommentSection } from './CommentSection';
@@ -149,25 +151,41 @@ export function PostCard({ post, currentUserId, onPostUpdate }: PostCardProps) {
           <div className="mt-3">
             {post.media_urls.length === 1 ? (
               <div className="rounded-lg overflow-hidden">
-                <Image
-                  src={post.media_urls[0]}
-                  alt="Post media"
-                  width={600}
-                  height={400}
-                  className="w-full h-auto object-cover"
-                />
+                {isVideoUrl(post.media_urls[0]) ? (
+                  <video
+                    src={post.media_urls[0]}
+                    controls
+                    className="w-full h-auto"
+                  />
+                ) : (
+                  <Image
+                    src={post.media_urls[0]}
+                    alt="Post media"
+                    width={600}
+                    height={400}
+                    className="w-full h-auto object-cover"
+                  />
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-2 rounded-lg overflow-hidden">
                 {post.media_urls.slice(0, 4).map((url, index) => (
                   <div key={index} className="relative">
-                    <Image
-                      src={url}
-                      alt={`Post media ${index + 1}`}
-                      width={300}
-                      height={200}
-                      className="w-full h-32 object-cover"
-                    />
+                    {isVideoUrl(url) ? (
+                      <video
+                        src={url}
+                        controls
+                        className="w-full h-32 object-cover bg-black"
+                      />
+                    ) : (
+                      <Image
+                        src={url}
+                        alt={`Post media ${index + 1}`}
+                        width={300}
+                        height={200}
+                        className="w-full h-32 object-cover"
+                      />
+                    )}
                     {index === 3 && post.media_urls!.length > 4 && (
                       <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
                         <span className="text-white font-semibold">

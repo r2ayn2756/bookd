@@ -57,6 +57,27 @@ export function FeedFallback({ currentUserId }: FeedFallbackProps) {
         });
 
         if (!feedError && feedData) {
+          // Fetch media/tags for these posts (RPC may not include them)
+          const postIds = feedData.map((p: any) => p.id);
+          let mediaById: Record<string, { media_urls?: string[]; media_types?: string[]; tags?: string[] }>
+            = {};
+          if (postIds.length > 0) {
+            const { data: postsExtra } = await supabase
+              .from('posts')
+              .select('id, media_urls, media_types, tags')
+              .in('id', postIds);
+            if (postsExtra) {
+              mediaById = postsExtra.reduce((acc: any, row: any) => {
+                acc[row.id] = {
+                  media_urls: row.media_urls || undefined,
+                  media_types: row.media_types || undefined,
+                  tags: row.tags || undefined,
+                };
+                return acc;
+              }, {} as Record<string, { media_urls?: string[]; media_types?: string[]; tags?: string[] }>);
+            }
+          }
+
           // Enrich with author data
           const enrichedPosts = await Promise.all(
             feedData.map(async (post: any) => {
@@ -82,7 +103,8 @@ export function FeedFallback({ currentUserId }: FeedFallbackProps) {
                 if (orgData) author = orgData;
               }
 
-              return { ...post, author } as FeedPost;
+              const extras = mediaById[post.id] || {};
+              return { ...post, ...extras, author } as FeedPost;
             })
           );
 
