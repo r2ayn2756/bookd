@@ -1,8 +1,10 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { useProfileData } from '@/hooks';
 import { Avatar } from './ProfilePictureUpload';
-import type { UserWithProfile } from '@/types/database';
+import type { UserWithProfile, OrganizationProfile } from '@/types/database';
+import { createClient } from '@/lib/supabase/client';
 
 interface ProfileHeaderProps {
   initialData?: UserWithProfile | null;
@@ -11,10 +13,42 @@ interface ProfileHeaderProps {
 
 export function ProfileHeader({ initialData, forceData }: ProfileHeaderProps) {
   const { profile, loading, error } = useProfileData();
+  const supabase = createClient();
+  const [organization, setOrganization] = useState<OrganizationProfile | null>(null);
   
   // Use forced data if provided (for viewing someone else's profile)
   const displayProfile = forceData || profile || initialData;
   const individualProfile = displayProfile?.individual_profile;
+  const initialAccountType = (initialData as any)?.account_type as 'artist' | 'organization' | undefined;
+  const clientAccountType = (profile as any)?.account_type as 'artist' | 'organization' | undefined;
+  // Trust client state when available; else fall back to initial server state
+  const resolvedAccountType: 'artist' | 'organization' | undefined = clientAccountType ?? initialAccountType ?? ((displayProfile as any)?.account_type as any);
+  const activeOrgId = resolvedAccountType === 'organization'
+    ? ((profile as any)?.active_organization_id as string | null | undefined) || ((initialData as any)?.active_organization_id as string | null | undefined)
+    : null;
+
+  // Load active organization details when in organization mode
+  useEffect(() => {
+    let mounted = true;
+    const loadOrg = async () => {
+      try {
+        if (accountType === 'organization' && activeOrgId) {
+          const { data } = await supabase
+            .from('organization_profiles')
+            .select('*')
+            .eq('id', activeOrgId)
+            .single();
+          if (mounted) setOrganization((data || null) as any);
+        } else {
+          if (mounted) setOrganization(null);
+        }
+      } catch {
+        if (mounted) setOrganization(null);
+      }
+    };
+    loadOrg();
+    return () => { mounted = false; };
+  }, [resolvedAccountType, activeOrgId, supabase]);
   
   if (!forceData && loading && !initialData) {
     return (
@@ -38,6 +72,9 @@ export function ProfileHeader({ initialData, forceData }: ProfileHeaderProps) {
   }
 
   const getDisplayName = () => {
+    if (organization?.name) {
+      return organization.name;
+    }
     if (individualProfile?.stage_name) {
       return individualProfile.stage_name;
     }
@@ -51,6 +88,13 @@ export function ProfileHeader({ initialData, forceData }: ProfileHeaderProps) {
 
 
   const getHeadliner = () => {
+    if (organization) {
+      const parts: string[] = [];
+      if (organization.organization_type) parts.push(organization.organization_type.replace(/_/g, ' '));
+      const loc = [organization.city, organization.state_province, organization.country].filter(Boolean).join(', ');
+      if (loc) parts.push(loc);
+      return parts.length > 0 ? parts.join(' | ') : 'Organization';
+    }
     if (individualProfile?.headliner) {
       return individualProfile.headliner;
     }
@@ -112,7 +156,7 @@ export function ProfileHeader({ initialData, forceData }: ProfileHeaderProps) {
             </div>
           )}
           
-          {individualProfile?.looking_for_gigs && (
+          {resolvedAccountType !== 'organization' && individualProfile?.looking_for_gigs && (
             <div className="flex items-center text-green-600">
               <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -122,26 +166,28 @@ export function ProfileHeader({ initialData, forceData }: ProfileHeaderProps) {
           )}
         </div>
 
-        {/* Instruments & Genres */}
-        <div className="mt-4 space-y-2">
-          {individualProfile?.instruments && individualProfile.instruments.length > 0 && (
-            <div>
-              <span className="text-sm font-medium text-gray-700">Instruments: </span>
-              <span className="text-sm text-gray-600">
-                {individualProfile.instruments.join(', ')}
-              </span>
-            </div>
-          )}
-          
-          {individualProfile?.genres && individualProfile.genres.length > 0 && (
-            <div>
-              <span className="text-sm font-medium text-gray-700">Genres: </span>
-              <span className="text-sm text-gray-600">
-                {individualProfile.genres.join(', ')}
-              </span>
-            </div>
-          )}
-        </div>
+        {/* Instruments & Genres (artists only) */}
+        {resolvedAccountType !== 'organization' && (
+          <div className="mt-4 space-y-2">
+            {individualProfile?.instruments && individualProfile.instruments.length > 0 && (
+              <div>
+                <span className="text-sm font-medium text-gray-700">Instruments: </span>
+                <span className="text-sm text-gray-600">
+                  {individualProfile.instruments.join(', ')}
+                </span>
+              </div>
+            )}
+            
+            {individualProfile?.genres && individualProfile.genres.length > 0 && (
+              <div>
+                <span className="text-sm font-medium text-gray-700">Genres: </span>
+                <span className="text-sm text-gray-600">
+                  {individualProfile.genres.join(', ')}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

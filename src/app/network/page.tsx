@@ -62,13 +62,42 @@ export default function NetworkPage() {
         if (showPeople) {
           const service = createUsersService();
           const data = onlyConnections
-            ? await service.listMyConnections(50, 0)
+            ? await service.listMyConnections(200, 0)
             : await service.listUsers(24, 0);
-          setInitial(data.filter((u) => u.id !== user?.id));
+          // Show only artists on the Artists tab
+          setInitial(
+            data
+              .filter((u) => u.id !== user?.id)
+              .filter((u) => (u as any).account_type !== 'organization')
+          );
         } else {
           const orgService = createOrganizationsService();
           const orgs = await orgService.listOrganizations(24, 0);
-          setOrgInitial(orgs);
+          const myOrgs = await orgService.listMyOrganizationsAdmin();
+          const myOrgIds = new Set(myOrgs.map((o) => o.id));
+          // Filter out organizations that correspond to users marked as artists
+          // (i.e., users whose account_type is 'artist' and have this org as active)
+          const { data: artistUsers } = await (orgService as any)["supabase"]
+            .from('users')
+            .select('active_organization_id, account_type')
+            .eq('account_type', 'artist')
+            .not('active_organization_id', 'is', null);
+          const artistOrgIds = new Set((artistUsers || []).map((u: any) => u.active_organization_id));
+          // If onlyConnections: show only orgs the current user follows
+          let followedOrgIds = new Set<string>();
+          if (onlyConnections) {
+            const { data: followed } = await (orgService as any)["supabase"]
+              .from('follows')
+              .select('followed_organization_id')
+              .eq('follower_user_id', user?.id)
+              .eq('status', 'active')
+              .not('followed_organization_id', 'is', null)
+              .limit(500);
+            followedOrgIds = new Set((followed || []).map((r: any) => r.followed_organization_id));
+          }
+          setOrgInitial(
+            orgs.filter((o) => !artistOrgIds.has(o.id) && !myOrgIds.has(o.id) && (!onlyConnections || followedOrgIds.has(o.id)))
+          );
         }
       } catch (e) {
         console.error('Failed loading initial list', e);
@@ -92,11 +121,37 @@ export default function NetworkPage() {
         if (showPeople) {
           const service = createUsersService();
           const data = await service.searchUsers(trimmed, 20, 0);
-          setResults(data.filter((u) => u.id !== user?.id));
+          // Show only artists on the Artists tab
+          setResults(
+            data
+              .filter((u) => u.id !== user?.id)
+              .filter((u) => (u as any).account_type !== 'organization')
+          );
         } else {
           const orgService = createOrganizationsService();
           const data = await orgService.searchOrganizations(trimmed, 20, 0);
-          setOrgResults(data);
+          const myOrgs = await orgService.listMyOrganizationsAdmin();
+          const myOrgIds = new Set(myOrgs.map((o) => o.id));
+          const { data: artistUsers } = await (orgService as any)["supabase"]
+            .from('users')
+            .select('active_organization_id, account_type')
+            .eq('account_type', 'artist')
+            .not('active_organization_id', 'is', null);
+          const artistOrgIds = new Set((artistUsers || []).map((u: any) => u.active_organization_id));
+          let followedOrgIds = new Set<string>();
+          if (onlyConnections) {
+            const { data: followed } = await (orgService as any)["supabase"]
+              .from('follows')
+              .select('followed_organization_id')
+              .eq('follower_user_id', user?.id)
+              .eq('status', 'active')
+              .not('followed_organization_id', 'is', null)
+              .limit(500);
+            followedOrgIds = new Set((followed || []).map((r: any) => r.followed_organization_id));
+          }
+          setOrgResults(
+            data.filter((o) => !artistOrgIds.has(o.id) && !myOrgIds.has(o.id) && (!onlyConnections || followedOrgIds.has(o.id)))
+          );
         }
       } catch (e) {
         console.error('Search failed', e);
@@ -251,17 +306,19 @@ export default function NetworkPage() {
       {/* Default Cards Grid */}
       {!query.trim() && (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {initial.length > 0 && initial.map((r) => (
-          <UserCard key={r.id} user={r} />
-        ))}
         {showPeople ? (
           // People Cards (demo cards removed)
           <>
-            {/* Demo cards removed */}
+            {initial.length > 0 && initial.map((r) => (
+              <UserCard key={r.id} user={r} />
+            ))}
           </>
         ) : (
           // Organization Cards
           <>
+            {orgInitial.length > 0 && orgInitial.map((o) => (
+              <OrganizationCard key={o.id} organization={o} />
+            ))}
             {/* Organization Card 1 */}
             <div className="bg-white rounded-lg shadow-md border-2 border-[#7823E1] overflow-hidden">
               <div className="h-48 bg-gradient-to-br from-red-100 to-red-200 flex items-center justify-center">
@@ -555,6 +612,173 @@ function UserCard({ user }: { user: UserWithProfile }) {
             ))}
           </div>
           <ConnectButton targetUserId={user.id} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OrganizationCard({ organization }: { organization: OrganizationProfile }) {
+  const displayName = organization.name || 'Unnamed Organization';
+  const typeKey = (organization.organization_type || 'other') as string;
+  const locationParts = [organization.city, organization.state_province, organization.country].filter(Boolean);
+  const location = locationParts.join(', ');
+  const genres = (organization.genres || []) as string[];
+  const statusText = organization.hiring_musicians ? 'Hiring' : organization.accepts_bookings ? 'Booking' : '';
+  const statusColor = organization.hiring_musicians ? 'text-green-600' : organization.accepts_bookings ? 'text-blue-600' : 'text-gray-500';
+
+  // Visual styles by org type (to mimic demo cards)
+  const TYPE_STYLES: Record<string, { label: string; from: string; to: string; iconBg: string; icon: JSX.Element }>
+    = {
+      venue: {
+        label: 'Music Venue',
+        from: 'from-red-100',
+        to: 'to-red-200',
+        iconBg: 'bg-red-500',
+        icon: (
+          <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M4 4a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2H4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
+          </svg>
+        )
+      },
+      music_school: {
+        label: 'Music School',
+        from: 'from-indigo-100',
+        to: 'to-indigo-200',
+        iconBg: 'bg-indigo-500',
+        icon: (
+          <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
+            <path d="M10.394 2.08a1 1 0 00-.788 0l-7 3a1 1 0 000 1.84L5.25 8.051a.999.999 0 01.356-.257l4-1.714a1 1 0 11.788 1.838L7.667 9.088l1.94.831a1 1 0 00.787 0l7-3a1 1 0 000-1.838l-7-3zM3.31 9.397L5 10.12v4.102a8.969 8.969 0 00-1.05-.174 1 1 0 01-.89-.89 11.115 11.115 0 01.25-3.762zM9.3 16.573A9.026 9.026 0 007 14.935v-3.957l1.818.78a3 3 0 002.364 0l5.508-2.361a11.026 11.026 0 01.25 3.762 1 1 0 01-.89.89 8.968 8.968 0 00-5.35 2.524 1 1 0 01-1.4 0zM6 18a1 1 0 001-1v-2.065a8.935 8.935 0 00-2-.712V17a1 1 0 001 1z" />
+          </svg>
+        )
+      },
+      event_organizer: {
+        label: 'Event Company',
+        from: 'from-yellow-100',
+        to: 'to-yellow-200',
+        iconBg: 'bg-yellow-500',
+        icon: (
+          <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M6 6V5a3 3 0 013-3h2a3 3 0 013 3v1h2a2 2 0 012 2v3.57A22.952 22.952 0 0110 13a22.95 22.95 0 01-8-1.43V8a2 2 0 012-2h2zm2-1a1 1 0 011-1h2a1 1 0 011 1v1H8V5zm1 5a1 1 0 011-1h.01a1 1 0 110 2H10a1 1 0 01-1-1z" clipRule="evenodd" />
+            <path d="M2 13.692V16a2 2 0 002 2h12a2 2 0 002-2v-2.308A24.974 24.974 0 0110 15c-2.796 0-5.487-.46-8-1.308z" />
+          </svg>
+        )
+      },
+      other: {
+        label: 'Organization',
+        from: 'from-gray-50',
+        to: 'to-gray-100',
+        iconBg: 'bg-[#7823E1]',
+        icon: (
+          <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
+            <path d="M10 2a1 1 0 00-1 1v2H5a1 1 0 000 2h4v2H7a1 1 0 000 2h2v2H8a1 1 0 000 2h1v2a1 1 0 102 0v-2h1a1 1 0 000-2h-1v-2h2a1 1 0 000-2h-2V7h3a1 1 0 000-2h-3V3a1 1 0 00-1-1z" />
+          </svg>
+        )
+      }
+    };
+
+  const style = TYPE_STYLES[typeKey] || TYPE_STYLES.other;
+
+  // Follow/unfollow organization
+  const [isFollowing, setIsFollowing] = useState<boolean | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const client = createClient();
+        const { data: { user } } = await client.auth.getUser();
+        if (!user) return;
+        const { data } = await client
+          .from('follows')
+          .select('id')
+          .eq('follower_user_id', user.id)
+          .eq('followed_organization_id', organization.id)
+          .eq('status', 'active')
+          .maybeSingle();
+        if (mounted) setIsFollowing(Boolean(data));
+      } catch {
+        if (mounted) setIsFollowing(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [organization.id]);
+
+  const toggleFollow = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLoading(true);
+    try {
+      const client = createClient();
+      const { data } = await (client as any).rpc('toggle_follow_organization', { target_org_id: organization.id });
+      setIsFollowing(Boolean(data));
+    } catch {
+      // no-op
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div
+      className="bg-white rounded-lg shadow-md border-2 border-[#7823E1] overflow-hidden cursor-pointer hover:shadow-lg transition-shadow"
+      onClick={() => window.location.assign(`/organization/${organization.id}`)}
+    >
+      <div className={`h-48 bg-gradient-to-br ${style.from} ${style.to} flex items-center justify-center`}>
+        <div className="text-center">
+          <div className={`w-16 h-16 ${style.iconBg} rounded-full flex items-center justify-center mx-auto mb-2`}>
+            {style.icon}
+          </div>
+          <span className="text-sm font-medium" style={{ color: '#7823E1' }}>{style.label}</span>
+        </div>
+      </div>
+      <div className="p-6">
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">{displayName}</h3>
+            <p className="text-sm text-gray-600">{TYPE_STYLES[typeKey]?.label || 'Organization'}</p>
+          </div>
+          {statusText && <span className={`text-sm font-medium ${statusColor}`}>{statusText}</span>}
+        </div>
+        <div className="space-y-2 mb-4">
+          {location && (
+            <div className="flex items-center text-sm text-gray-600">
+              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              {location}
+            </div>
+          )}
+          {typeof organization.total_events === 'number' && organization.total_events > 0 && (
+            <div className="flex items-center text-sm text-gray-600">
+              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2-2v2m8 0V6a2 2 0 012 2v6a2 2 0 01-2 2H8a2 2 0 01-2-2V8a2 2 0 012-2h8zM8 14v.01M12 14v.01M16 14v.01" />
+              </svg>
+              {organization.total_events}+ Events Hosted
+            </div>
+          )}
+        </div>
+
+        {organization.description && (
+          <p className="text-sm text-gray-700 mb-4 line-clamp-3">{organization.description}</p>
+        )}
+
+        <div className="flex items-center justify-between">
+          <div className="flex flex-wrap gap-2">
+            {genres.slice(0, 3).map((g) => (
+              <GenrePill key={g} name={g} />
+            ))}
+          </div>
+          <button
+            onClick={toggleFollow}
+            disabled={loading}
+            className="px-4 py-2 text-white rounded-lg text-sm font-medium hover:opacity-90 transition-colors disabled:opacity-60"
+            style={{ backgroundColor: '#7823E1' }}
+            type="button"
+          >
+            {loading ? '...' : isFollowing ? 'Connected' : 'Connect'}
+          </button>
         </div>
       </div>
     </div>

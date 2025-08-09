@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/client';
-import type { OrganizationProfile } from '@/types/database';
+import type { OrganizationProfile, OrganizationPerformance } from '@/types/database';
 
 type SupabaseClient = ReturnType<typeof createClient>;
 
@@ -93,8 +93,8 @@ export class OrganizationsService {
   }
 
   async updateOrganization(orgId: string, updates: Partial<OrganizationProfile>): Promise<OrganizationProfile | null> {
-    // Prefer RPC to bypass RLS complexity using SECURITY DEFINER
-    const { data, error } = await (this.supabase as any).rpc('update_my_active_org', {
+    // Try RPC first (uses active_organization_id)
+    const rpc = await (this.supabase as any).rpc('update_my_active_org', {
       p_name: updates.name ?? null,
       p_description: (updates as any).description ?? null,
       p_website_url: (updates as any).website_url ?? null,
@@ -105,15 +105,91 @@ export class OrganizationsService {
       p_accepts_bookings: (updates as any).accepts_bookings ?? null,
       p_hiring_musicians: (updates as any).hiring_musicians ?? null,
     });
-    if (error) {
-      console.error('Error updating organization via RPC (client):', {
-        message: (error as any)?.message,
-        details: (error as any)?.details,
-        hint: (error as any)?.hint,
+
+    if (!(rpc as any).error && (rpc as any).data) {
+      let updated = (rpc as any).data as OrganizationProfile;
+      // Apply supplemental fields (like address or headliner) directly if provided
+      const supplemental: any = {};
+      if (Object.prototype.hasOwnProperty.call(updates, 'address')) supplemental.address = (updates as any).address ?? null;
+      if (Object.prototype.hasOwnProperty.call(updates, 'headliner')) supplemental.headliner = (updates as any).headliner ?? null;
+      if (Object.keys(supplemental).length > 0) {
+        const { data: row, error: supErr } = await this.supabase
+          .from('organization_profiles')
+          .update(supplemental)
+          .eq('id', orgId)
+          .select('*')
+          .single();
+        if (!supErr && row) updated = row as OrganizationProfile;
+      }
+      return updated;
+    }
+
+    // Fallback: Direct update by orgId (works if user is an org admin under RLS)
+    const directPayload: any = {};
+    const fields = ['name','description','website_url','phone_number','email','city','country','accepts_bookings','hiring_musicians','address','headliner'] as const;
+    for (const key of fields) {
+      if (Object.prototype.hasOwnProperty.call(updates, key)) {
+        (directPayload as any)[key] = (updates as any)[key as keyof OrganizationProfile] as any;
+      }
+    }
+    const { data: directRow, error: directErr } = await this.supabase
+      .from('organization_profiles')
+      .update(directPayload)
+      .eq('id', orgId)
+      .select('*')
+      .single();
+    if (directErr) {
+      console.warn('Direct organization update failed:', {
+        message: (directErr as any)?.message,
+        details: (directErr as any)?.details,
       });
       return null;
     }
-    return data as OrganizationProfile;
+    return directRow as OrganizationProfile;
+  }
+
+  async listOrganizationPerformances(orgId: string): Promise<OrganizationPerformance[]> {
+    const { data, error } = await this.supabase
+      .from('organization_performances')
+      .select('*')
+      .eq('organization_id', orgId)
+      .order('performance_date', { ascending: false });
+    if (error) {
+      // Avoid noisy overlay when table not yet migrated
+      console.warn('Org performances unavailable:', (error as any)?.message || error);
+      return [];
+    }
+    return (data || []) as OrganizationPerformance[];
+  }
+
+  async createOrganizationPerformance(orgId: string, payload: {
+    title: string;
+    performance_date?: string | null;
+    venue?: string | null;
+    description?: string | null;
+  }): Promise<OrganizationPerformance | null> {
+    const { data, error } = await this.supabase
+      .from('organization_performances')
+      .insert([{ organization_id: orgId, ...payload }])
+      .select('*')
+      .single();
+    if (error) {
+      console.warn('Error creating org performance (client):', error);
+      return null;
+    }
+    return data as OrganizationPerformance;
+  }
+
+  async deleteOrganizationPerformance(id: string): Promise<boolean> {
+    const { error } = await this.supabase
+      .from('organization_performances')
+      .delete()
+      .eq('id', id);
+    if (error) {
+      console.warn('Error deleting org performance (client):', error);
+      return false;
+    }
+    return true;
   }
 
   async listOrganizations(limit: number = 24, offset: number = 0): Promise<OrganizationProfile[]> {

@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from 'react';
-import type { OrganizationProfile, UserWithProfile } from '@/types/database';
+import type { OrganizationProfile, UserWithProfile, OrganizationPerformance } from '@/types/database';
 import { createOrganizationsService } from '@/services/client/organizations';
 
 type Props = {
@@ -12,6 +12,8 @@ export function OrganizationEditForm({ userWithProfile }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [performances, setPerformances] = useState<OrganizationPerformance[]>([]);
+  const [newPerf, setNewPerf] = useState<{ title: string; performance_date: string; venue: string; description: string }>({ title: '', performance_date: '', venue: '', description: '' });
 
   useEffect(() => {
     async function ensureOrg() {
@@ -32,6 +34,12 @@ export function OrganizationEditForm({ userWithProfile }: Props) {
           .single();
         if (error) throw error;
         setOrg(data as OrganizationProfile);
+        try {
+          const perfs = await orgService.listOrganizationPerformances(activeOrgId);
+          setPerformances(perfs);
+        } catch {
+          setPerformances([]);
+        }
       } catch (e: any) {
         console.error('Failed to load organization', e);
         setError('Failed to load organization');
@@ -56,6 +64,7 @@ export function OrganizationEditForm({ userWithProfile }: Props) {
         email: org.email ?? null,
         city: org.city ?? null,
         country: org.country ?? null,
+        headliner: (org as any).headliner ?? null,
         accepts_bookings: Boolean(org.accepts_bookings),
         hiring_musicians: Boolean(org.hiring_musicians),
       } as Partial<OrganizationProfile>;
@@ -67,6 +76,36 @@ export function OrganizationEditForm({ userWithProfile }: Props) {
       setError(e?.message || 'Failed to save');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function addPerformance(e: React.FormEvent) {
+    e.preventDefault();
+    if (!org || !newPerf.title.trim()) return;
+    try {
+      const orgService = createOrganizationsService();
+      const created = await orgService.createOrganizationPerformance(org.id, {
+        title: newPerf.title.trim(),
+        performance_date: newPerf.performance_date ? newPerf.performance_date : null,
+        venue: newPerf.venue || null,
+        description: newPerf.description || null,
+      });
+      if (created) {
+        setPerformances((prev) => [created, ...prev]);
+        setNewPerf({ title: '', performance_date: '', venue: '', description: '' });
+      }
+    } catch (e) {
+      console.error('Failed to add performance', e);
+    }
+  }
+
+  async function deletePerformance(id: string) {
+    try {
+      const orgService = createOrganizationsService();
+      const ok = await orgService.deleteOrganizationPerformance(id);
+      if (ok) setPerformances((prev) => prev.filter((p) => p.id !== id));
+    } catch (e) {
+      console.error('Failed to delete performance', e);
     }
   }
 
@@ -92,9 +131,22 @@ export function OrganizationEditForm({ userWithProfile }: Props) {
         </div>
 
         <div>
+          <label className="block text-sm font-medium text-gray-700">Headliner</label>
+          <input className="mt-1 w-full border rounded px-3 py-2" value={(org as any).headliner ?? ''}
+                 onChange={(e) => setOrg({ ...org, headliner: e.target.value } as any)} />
+          <p className="text-xs text-gray-500 mt-1">A short tagline that appears under the organization name.</p>
+        </div>
+
+        <div>
           <label className="block text-sm font-medium text-gray-700">Description</label>
           <textarea className="mt-1 w-full border rounded px-3 py-2" rows={4} value={org.description ?? ''}
                     onChange={(e) => setOrg({ ...org, description: e.target.value })} />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700">Address</label>
+          <input className="mt-1 w-full border rounded px-3 py-2" value={[org.address, org.city, org.state_province, org.postal_code, org.country].filter(Boolean).join(', ')}
+                 onChange={(e) => setOrg({ ...org, address: e.target.value })} placeholder="Street, City, State, ZIP, Country" />
         </div>
 
         <div>
@@ -116,18 +168,7 @@ export function OrganizationEditForm({ userWithProfile }: Props) {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">City</label>
-            <input className="mt-1 w-full border rounded px-3 py-2" value={org.city ?? ''}
-                   onChange={(e) => setOrg({ ...org, city: e.target.value })} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Country</label>
-            <input className="mt-1 w-full border rounded px-3 py-2" value={org.country ?? ''}
-                   onChange={(e) => setOrg({ ...org, country: e.target.value })} />
-          </div>
-        </div>
+        {/* City/Country removed in favor of single address line above (kept values in state) */}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
@@ -160,6 +201,65 @@ export function OrganizationEditForm({ userWithProfile }: Props) {
         </button>
         {error && <span className="text-sm text-red-600">{error}</span>}
         {success && <span className="text-sm text-green-600">{success}</span>}
+      </div>
+
+      {/* Major Performances */}
+      <div className="mt-8">
+        <h3 className="text-lg font-semibold text-gray-900 mb-2">Major Performances</h3>
+        <form onSubmit={addPerformance} className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+          <input
+            type="text"
+            placeholder="Title"
+            className="border rounded px-3 py-2"
+            value={newPerf.title}
+            onChange={(e) => setNewPerf({ ...newPerf, title: e.target.value })}
+            required
+          />
+          <input
+            type="date"
+            className="border rounded px-3 py-2"
+            value={newPerf.performance_date}
+            onChange={(e) => setNewPerf({ ...newPerf, performance_date: e.target.value })}
+          />
+          <input
+            type="text"
+            placeholder="Venue"
+            className="border rounded px-3 py-2"
+            value={newPerf.venue}
+            onChange={(e) => setNewPerf({ ...newPerf, venue: e.target.value })}
+          />
+          <div className="flex gap-2">
+            <input
+              type="text"
+              placeholder="Description"
+              className="flex-1 border rounded px-3 py-2"
+              value={newPerf.description}
+              onChange={(e) => setNewPerf({ ...newPerf, description: e.target.value })}
+            />
+            <button type="submit" className="px-4 py-2 bg-[#7823E1] text-white rounded">Add</button>
+          </div>
+        </form>
+
+        {performances.length === 0 ? (
+          <p className="text-sm text-gray-600">No performances yet.</p>
+        ) : (
+          <ul className="divide-y">
+            {performances.map((p) => (
+              <li key={p.id} className="py-3 flex items-center justify-between">
+                <div>
+                  <div className="font-medium text-gray-900">{p.title}</div>
+                  <div className="text-sm text-gray-600">
+                    {[p.performance_date ? new Date(p.performance_date).toLocaleDateString() : null, p.venue]
+                      .filter(Boolean)
+                      .join(' • ')}
+                  </div>
+                  {p.description && <div className="text-sm text-gray-600">{p.description}</div>}
+                </div>
+                <button onClick={() => deletePerformance(p.id)} className="text-red-600 hover:text-red-700 text-sm">Delete</button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );

@@ -156,6 +156,7 @@ export interface OrganizationProfile {
   established_year: number | null;
   capacity: number | null;
   genres: string[] | null;
+  headliner?: string | null;
   
   // Business information
   business_registration_number: string | null;
@@ -205,6 +206,17 @@ export interface OrganizationProfile {
   // Timestamps
   created_at: string; // ISO timestamp
   updated_at: string; // ISO timestamp
+}
+
+export interface OrganizationPerformance {
+  id: string;
+  organization_id: string;
+  title: string;
+  performance_date: string | null; // ISO date
+  venue: string | null;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export type AdminRole = 'owner' | 'admin' | 'manager' | 'editor';
